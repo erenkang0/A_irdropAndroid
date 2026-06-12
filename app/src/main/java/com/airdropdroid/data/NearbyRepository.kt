@@ -19,22 +19,33 @@ import com.airdropdroid.transport.TransferServer
 import com.airdropdroid.transport.WifiDirectTransport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.OutputStream
 
 /**
- * Keşif (BLE + LAN + Wi-Fi Direct) ve transferi tek noktada birleştirir. UI yalnızca
- * bu sınıfın akışlarını dinler ve eylemlerini çağırır.
+ * Keşif (BLE + LAN + Wi-Fi Direct) ve transferi tek noktada birleştirir.
+ *
+ * Uygulama genelinde TEK örnek olarak yaşar ([com.airdropdroid.App] üzerinden);
+ * arka plandaki [com.airdropdroid.service.NearbyService] ile UI aynı örneği
+ * paylaşır. Kendi coroutine scope'unu yönetir, böylece alım Activity'nin yaşam
+ * döngüsüne bağlı kalmaz.
  */
 class NearbyRepository(
     private val context: Context,
     private val displayName: String,
 ) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     private val bleAdvertiser = BleAdvertiser(context)
     private val bleScanner = BleScanner(context)
     private val lan = LanDiscovery(context)
@@ -52,16 +63,27 @@ class NearbyRepository(
     private val _incoming = MutableStateFlow<IncomingRequest?>(null)
     val incoming: StateFlow<IncomingRequest?> = _incoming.asStateFlow()
 
+    /** Arka planda tamamen alınan her dosya (bildirim göstermek için). */
+    private val _receivedFiles = MutableSharedFlow<FileMeta>(extraBufferCapacity = 16)
+    val receivedFiles: SharedFlow<FileMeta> = _receivedFiles.asSharedFlow()
+
     private var pendingDecision: CompletableDeferred<Boolean>? = null
 
     private var server: TransferServer? = null
-    private val jobs = mutableListOf<Job>()
+    private val discoveryJobs = mutableListOf<Job>()
 
-    /** Alıcı sunucuyu başlatır ve cihazı görünür yapar (keşif yayını + mDNS kaydı). */
-    fun startReceiving(scope: CoroutineScope) {
+    val isReceiving: Boolean get() = server != null
+
+    /** Alıcı sunucuyu başlatır ve cihazı görünür yapar (BLE yayını + mDNS kaydı). */
+    fun startReceiving() {
         if (server != null) return
         val handler = object : ReceiveHandler {
+            // Onay/ilerleme bildirimlerinde gönderen adını gösterebilmek için saklanır.
+            @Volatile
+            private var senderName: String = "Gönderen"
+
             override suspend fun decide(request: IncomingRequest): Boolean {
+                senderName = request.senderName
                 _incoming.value = request
                 val deferred = CompletableDeferred<Boolean>()
                 pendingDecision = deferred
@@ -76,7 +98,7 @@ class NearbyRepository(
 
             override fun onProgress(fileName: String, transferred: Long, total: Long) {
                 _transferState.value = TransferState.InProgress(
-                    deviceName = "Gönderen",
+                    deviceName = senderName,
                     fileName = fileName,
                     bytesTransferred = transferred,
                     totalBytes = total,
@@ -85,7 +107,8 @@ class NearbyRepository(
             }
 
             override fun onFileDone(meta: FileMeta) {
-                _transferState.value = TransferState.Completed("Gönderen", 1)
+                _transferState.value = TransferState.Completed(senderName, 1)
+                _receivedFiles.tryEmit(meta)
             }
         }
         val srv = TransferServer(handler)
@@ -96,6 +119,16 @@ class NearbyRepository(
         lan.register(displayName, TRANSFER_PORT)
     }
 
+    /** Alımı ve görünürlüğü kapatır (keşif etkilenmez). */
+    fun stopReceiving() {
+        server?.stop()
+        server = null
+        bleAdvertiser.stop()
+        lan.unregister()
+        // Cevapsız bekleyen istek varsa reddet ki gönderen takılı kalmasın.
+        respondToIncoming(false)
+    }
+
     /** Kullanıcının gelen istek için verdiği kararı iletir. */
     fun respondToIncoming(accept: Boolean) {
         pendingDecision?.complete(accept)
@@ -103,16 +136,16 @@ class NearbyRepository(
     }
 
     /** Tüm keşif kaynaklarını dinlemeye başlar. */
-    fun startDiscovery(scope: CoroutineScope) {
+    fun startDiscovery() {
         stopDiscovery()
-        jobs += scope.launch { bleScanner.scan().collect { upsert(it) } }
-        jobs += scope.launch { lan.discover(displayName).collect { upsert(it) } }
-        jobs += scope.launch { wifiDirect.discover().collect { upsert(it) } }
+        discoveryJobs += scope.launch { bleScanner.scan().collect { upsert(it) } }
+        discoveryJobs += scope.launch { lan.discover(displayName).collect { upsert(it) } }
+        discoveryJobs += scope.launch { wifiDirect.discover().collect { upsert(it) } }
     }
 
     fun stopDiscovery() {
-        jobs.forEach { it.cancel() }
-        jobs.clear()
+        discoveryJobs.forEach { it.cancel() }
+        discoveryJobs.clear()
     }
 
     /**
@@ -174,15 +207,6 @@ class NearbyRepository(
 
     fun resetTransferState() {
         _transferState.value = TransferState.Idle
-    }
-
-    fun shutdown() {
-        stopDiscovery()
-        server?.stop()
-        server = null
-        bleAdvertiser.stop()
-        lan.unregister()
-        wifiDirect.disconnect()
     }
 
     private companion object {

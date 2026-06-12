@@ -38,7 +38,7 @@ fun RadarScreen(
             style = MaterialTheme.typography.titleLarge,
         )
         Text(
-            text = "Dosya almak için bu ekran açık kalsın",
+            text = "Alım arka planda da açık — bildirimden yönetebilirsin",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
         )

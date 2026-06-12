@@ -25,12 +25,20 @@ internetsiz yakın dosya paylaşım uygulaması.
 - **Paylaş menüsü entegrasyonu** — Galeri vb. herhangi bir uygulamadan
   "Paylaş" deyince bu uygulama listede çıkar (`ACTION_SEND` /
   `ACTION_SEND_MULTIPLE`).
+- **Arka planda alım** — foreground servis sayesinde uygulama kapalıyken de
+  dosya alınır; gelen istekler bildirimden **Kabul/Reddet** ile yanıtlanır,
+  ilerleme bildirimde gösterilir, kalıcı bildirimdeki **Durdur** ile kapatılır.
 - Alınan dosyalar `İndirilenler/AirDrop` klasörüne kaydedilir.
 
 ## Gereksinimler
 
 - Android 16 (API 36)
 - BLE destekli cihaz; Wi-Fi Direct opsiyonel
+
+## İndirme
+
+Hazır APK'lar [Releases](../../releases) sayfasında. Her `v*` tag'i push'landığında
+GitHub Actions APK'yı derleyip release'e ekler.
 
 ## Derleme
 
@@ -42,7 +50,7 @@ internetsiz yakın dosya paylaşım uygulaması.
 ## Kullanım
 
 1. Uygulamayı **iki** cihaza da kur ve aç (Bluetooth + bildirim izinlerini ver).
-2. Alıcı cihazda uygulama açık kalsın (görünür mod).
+2. Alıcı cihaz görünür kalır — uygulama kapalıyken bile arka planda alım çalışır.
 3. Gönderen cihazda: Galeri → dosya seç → **Paylaş** → **AirDrop** →
    listeden hedef cihaza dokun.
 4. Alıcıda çıkan pencerede **Kabul et**'e bas. Dosyalar
